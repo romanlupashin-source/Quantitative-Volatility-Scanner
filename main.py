@@ -1,104 +1,47 @@
-import yfinance as yf
-import pandas as pd
-import time
-import requests
-from colorama import init, Fore, Style
-from datetime import datetime
-
-# ==========================================
-# ⚙️ CONFIGURATION
-# ==========================================
-# NOTE: In a production environment, use os.getenv() for keys.
-TG_TOKEN = "8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk"
-TG_CHAT_ID = "6935198093"
-
-# ==========================================
-# 📋 ASSET LIST
-# ==========================================
-TICKERS = [
-    'MARA', 'RIOT', 'COIN', 'MSTR', 'CLSK', # Crypto
-    'GME', 'AMC', 'HOOD', 'PLTR', 'SOFI',   # Meme
-    'NVDA', 'AMD', 'TSLA', 'SMCI', 'ARM',   # Tech
-    'NAMM', 'ROMA', 'CVNA', 'UPST', 'AI',   # Volatile
-    'NVAX', 'MRNA'                          # BioTech
-]
-
-MIN_MOVE_PCT = 2.0 
-init(autoreset=True)
-
-def send_telegram(message):
-    try:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        data = {"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-        requests.post(url, data=data)
-    except Exception as e:
-        print(f"Telegram Error: {e}")
+# Добавляем "блокнот" памяти бота (положи это где-то под TICKERS)
+positions = {} 
 
 def analyze_ticker(ticker):
+    """Мозг бота с памятью позиций: Покупка -> Продажа"""
+    global positions # Разрешаем боту писать в блокнот
+    
     try:
+        # 1. Загрузка данных
         stock = yf.Ticker(ticker)
         df = stock.history(period="1d", interval="5m")
-        if len(df) < 5: return None
+        if len(df) < 2: return
 
         current_price = df['Close'].iloc[-1]
         open_price = df['Open'].iloc[0]
-        volume_today = df['Volume'].sum()
-        
-        # Risk Management: 0.1% of daily volume limit
-        max_shares = int(volume_today * 0.001)
-        max_usd = max_shares * current_price
-
-        # Liquidity Filter: Ignore if limit < $1000
-        if max_usd < 1000: return None
-
         pct_change = ((current_price - open_price) / open_price) * 100
         
-        # Trend Analysis
-        recent_trend = df['Close'].tail(6)
-        is_uptrend = recent_trend.is_monotonic_increasing
-        is_downtrend = recent_trend.is_monotonic_decreasing
-        trend_icon = "⚠️"
-        if is_uptrend or is_downtrend: trend_icon = "✅ (Stable)"
+        # Фильтр ликвидности
+        volume_today = df['Volume'].sum()
+        if volume_today * current_price < 100000: return
 
-        signal_msg = None
+        # 2. Логика ПОКУПКИ (Если актива нет в нашем "блокноте")
+        if ticker not in positions:
+            # Например, покупаем, если цена упала на MIN_MOVE_PCT (ловим дно)
+            # Или можешь поменять на > MIN_MOVE_PCT, если хочешь покупать на росте
+            if pct_change <= -MIN_MOVE_PCT: 
+                positions[ticker] = current_price # Записываем цену покупки
+                msg = f"🟢 *ПОКУПКА {ticker}*\nЦена: ${current_price:.2f}\nПричина: Просадка {pct_change:.2f}%"
+                print(Fore.GREEN + f"BUY {ticker}")
+                send_telegram(msg)
+                
+        # 3. Логика ПРОДАЖИ (Если актив уже куплен)
+        else:
+            buy_price = positions[ticker]
+            # Считаем, сколько мы заработали или потеряли с момента покупки
+            profit_pct = ((current_price - buy_price) / buy_price) * 100
+            
+            # Продаем, если прибыль больше 2% ИЛИ убыток больше 1% (Stop-Loss)
+            if profit_pct >= 2.0 or profit_pct <= -1.0:
+                del positions[ticker] # Вычеркиваем из блокнота
+                emoji = "🚀" if profit_pct > 0 else "🔻"
+                msg = f"{emoji} *ПРОДАЖА {ticker}*\nЦена: ${current_price:.2f}\nИтог: {profit_pct:.2f}%"
+                print(Fore.YELLOW + f"SELL {ticker}")
+                send_telegram(msg)
 
-        if pct_change >= MIN_MOVE_PCT:
-            emoji = "🚀 BUY (LONG)"
-            signal_msg = (
-                f"{emoji} *{ticker}*\n"
-                f"Growth: *{pct_change:.2f}%*\n"
-                f"Trend: {trend_icon}\n"
-                f"💰 Max Size: *${max_usd:,.0f}*\n"
-                f"🔮 Projected: ${current_price:.2f}"
-            )
-
-        elif pct_change <= -MIN_MOVE_PCT:
-            emoji = "🔻 SELL (SHORT)"
-            signal_msg = (
-                f"{emoji} *{ticker}*\n"
-                f"Drop: *{pct_change:.2f}%*\n"
-                f"Trend: {trend_icon}\n"
-                f"💰 Max Size: *${max_usd:,.0f}*\n"
-                f"🔮 Projected: ${current_price:.2f}"
-            )
-
-        if signal_msg:
-            color = Fore.GREEN if "BUY" in signal_msg else Fore.RED
-            print(color + signal_msg.replace("*", "")) 
-            print("-" * 30)
-            # send_telegram(signal_msg) # Uncomment to enable alerts
-
-    except Exception:
-        pass
-
-def main():
-    print(Fore.CYAN + f"Scanning market... {datetime.now().strftime('%H:%M')}")
-    for ticker in TICKERS:
-        analyze_ticker(ticker)
-
-if __name__ == "__main__":
-    print("Bot started. Monitoring volatility...")
-    while True:
-        main()
-        print("Waiting 5 minutes...")
-        time.sleep(300)
+    except Exception as e:
+        print(Fore.RED + f"Ошибка {ticker}: {e}")
