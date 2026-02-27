@@ -9,8 +9,8 @@ from datetime import datetime
 # ⚙️ CONFIGURATION
 # ==========================================
 # NOTE: In a production environment, use os.getenv() for keys.
-TG_TOKEN = "YOUR_TOKEN_HERE_OR_ENV_VAR"
-TG_CHAT_ID = "YOUR_ID_HERE"
+TG_TOKEN = "8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk"
+TG_CHAT_ID = "6935198093"
 
 # ==========================================
 # 📋 ASSET LIST
