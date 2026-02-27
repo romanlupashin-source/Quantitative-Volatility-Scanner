@@ -10,7 +10,7 @@ init(autoreset=True)
 
 # КЛЮЧИ ТЕЛЕГРАМ
 TG_TOKEN = "8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk"
-TG_CHAT_ID = "ВСТАВЬ_СЮДА_СВОЙ_CHAT_ID" # <--- РОМАН, НЕ ЗАБУДЬ ВСТАВИТЬ СВОИ ЦИФРЫ!
+TG_CHAT_ID = "6935198093" # <--- РОМАН, НЕ ЗАБУДЬ ВСТАВИТЬ СВОИ ЦИФРЫ!
 
 # НАСТРОЙКИ
 TICKERS = ["BTC-USD", "ETH-USD", "NVAX", "TSLA", "AAPL"] 
