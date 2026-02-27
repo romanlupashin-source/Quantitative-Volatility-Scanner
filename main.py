@@ -1,4 +1,3 @@
-# 1. ЭТУ ЧАСТЬ НЕ ТРОГАЕМ (оставляем твои импорты и ключи)
 import yfinance as yf
 import pandas as pd
 import requests
@@ -9,23 +8,30 @@ import pytz
 
 init(autoreset=True)
 
-TG_TOKEN = "8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk" # Твой токен на одной строке!
-TG_CHAT_ID = "123456789" # Твой Chat ID
+# КЛЮЧИ ТЕЛЕГРАМ
+TG_TOKEN = "8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk"
+TG_CHAT_ID = "ВСТАВЬ_СЮДА_СВОЙ_CHAT_ID" # <--- РОМАН, НЕ ЗАБУДЬ ВСТАВИТЬ СВОИ ЦИФРЫ!
 
+# НАСТРОЙКИ
 TICKERS = ["BTC-USD", "ETH-USD", "NVAX", "TSLA", "AAPL"] 
 MIN_MOVE_PCT = 2.0 
 
-# ==========================================
-# 2. ДОБАВЛЯЕМ ЭТУ СТРОЧКУ СЮДА:
+# ПАМЯТЬ БОТА
 positions = {} 
-# ==========================================
 
-# 3. ЭТУ ФУНКЦИЮ НЕ ТРОГАЕМ
 def send_telegram(text):
-    # ... тут твой старый код отправки сообщений ...
+    """Отправка сообщений в Telegram"""
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TG_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(Fore.RED + f"Ошибка отправки в TG: {e}")
 
-# ==========================================
-# 4. УДАЛЯЕШЬ СТАРУЮ def analyze_ticker И ВСТАВЛЯЕШЬ НОВУЮ:
 def analyze_ticker(ticker):
     """Мозг бота с памятью позиций: Покупка -> Продажа"""
     global positions 
@@ -62,8 +68,15 @@ def analyze_ticker(ticker):
 
     except Exception as e:
         print(Fore.RED + f"Ошибка {ticker}: {e}")
-# ==========================================
 
-# 5. НИЖНЮЮ ЧАСТЬ НЕ ТРОГАЕМ (это мотор бота)
 if __name__ == "__main__":
-    # ... тут твой старый код с while True ...
+    print(Fore.CYAN + "Бот запущен. Умный сканер с памятью позиций активирован...")
+    send_telegram("✅ Бот запущен в облаке. Мониторинг начался.")
+    
+    while True:
+        for ticker in TICKERS:
+            analyze_ticker(ticker)
+        
+        now = datetime.now().strftime("%H:%M:%S")
+        print(Fore.BLUE + f"[{now}] Цикл завершен. Ожидание 5 минут...")
+        time.sleep(300)
