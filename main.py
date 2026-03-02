@@ -1,133 +1,79 @@
-import io
 import yfinance as yf
-import telebot
-import requests
-import pandas as pd
 import time
-from datetime import datetime
+import asyncio
+from telegram import Bot
 
-# --- КОНФИГУРАЦИЯ ---
-TOKEN = '8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk'
-CHAT_ID = '6935198093'
-bot = telebot.TeleBot(TOKEN)
+# --- НАСТРОЙКИ ---
+TELEGRAM_TOKEN = 'ТВОЙ_ТОКЕН_БОТА'
+CHAT_ID = 'ТВОЙ_CHAT_ID'
+# Список тикеров для сканирования (добавь те, что советовал лидер)
+TICKERS = ['BNAI', 'TQQQ', 'TIRX', 'JEM', 'LBGJ', 'KIDZ', 'AAPL', 'NVDA', 'AMD']
 
-# Твой баланс в симуляторе (обновляй это число по мере роста капитала)
-START_BALANCE = 100000.0
-current_balance = START_BALANCE
+# Параметры стратегии
+MAX_STOCK_PRICE = 15.0      # Ищем только дешевые/волатильные акции
+VOLATILITY_THRESHOLD = 1.2  # Сигнал при изменении на 1.2% за минуту
+START_BALANCE = 99087.0     # Твой текущий Cash в симуляторе
 
-# Настройки времени
-WORK_START = 10
-WORK_END = 23
+bot = Bot(token=TELEGRAM_TOKEN)
 
-# Настройки стратегии
-VOLATILITY_THRESHOLD = 0.4  # Сигнал при изменении > 0.4% за минуту
-SCAN_INTERVAL = 15          # Проверка каждые 15 секунд
+async def send_signal(message):
+    print(f"Отправка сигнала: {message}")
+    await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
 
-# --- ПЕРЕМЕННЫЕ СОСТОЯНИЯ ---
-sent_signals = {}  # { 'TICKER': timestamp }
-
-# --- ФУНКЦИИ ---
-
-def get_volatile_tickers():
+def get_price(ticker):
     try:
-        url = "https://finance.yahoo.com/markets/stocks/most-active/"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        tables = pd.read_html(io.StringIO(response.text)) 
-        df = tables[0]
-        
-        top_tickers = df['Symbol'].head(30).tolist()
-        manual_list = ["BNAI", "MRNO", "RMSG", "MARA", "RIOT", "TQQQ", "SOXL", "NVDA", "TSLA"]
-        
-        combined = [str(t).strip() for t in (top_tickers + manual_list)]
-        return list(set(combined))
+        data = yf.download(ticker, period='1d', interval='1m', progress=False)
+        if not data.empty:
+            return data['Close'].iloc[-1]
     except Exception as e:
-        print(f"⚠️ Ошибка сбора тикеров: {e}")
-        return ["TSLA", "NVDA", "MARA", "TQQQ", "AAPL", "BNAI"]
+        print(f"Ошибка получения данных для {ticker}: {e}")
+    return None
 
-def send_telegram_signal(ticker, action, price, change):
-    global current_balance
+async def monitor():
+    print("🎯 Режим Охотника запущен. Слежу за рынком...")
+    # Словарь для хранения предыдущих цен
+    last_prices = {ticker: get_price(ticker) for ticker in TICKERS}
     
-    # Расчет: сколько штук купить на 90% текущего Buying Power
-    # Чтобы не вылететь за лимиты симулятора
-    percent_to_invest = 0.9 
-    potential_qty = int((current_balance * percent_to_invest) / price)
-    
-    emoji = "🚀" if "BUY" in action else "⚠️"
-    msg = (
-        f"{emoji} **СИГНАЛ: {action} {ticker}**\n"
-        f"📈 Изменение: {change:+.2f}%\n"
-        f"💵 Цена (Real-time): ${price:.2f}\n"
-        f"📊 **РЕКОМЕНДАЦИЯ:** Купить **{potential_qty}** шт.\n"
-        f"⏳ В симуляторе цена обновится через ~20 мин!\n"
-        f"---------------------------\n"
-        f"💰 Твой баланс: ${current_balance:.2f}"
-    )
-    try:
-        bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
-    except Exception as e:
-        print(f"Ошибка ТГ: {e}")
-
-def monitor():
-    global current_balance
-    print(f"🚀 Машина времени запущена. Баланс: ${current_balance}")
-    
-    tickers = get_volatile_tickers()
-    last_ticker_update = time.time()
-
     while True:
-        now = datetime.now()
-        current_time = time.time()
-        
-        if current_time - last_ticker_update > 1800:
-            tickers = get_volatile_tickers()
-            last_ticker_update = current_time
-            sent_signals.clear()
-
-        if WORK_START <= now.hour < WORK_END:
-            print(f"🔎 [{now.strftime('%H:%M:%S')}] Сканирую {len(tickers)} акций...")
+        for ticker in TICKERS:
+            price_now = get_price(ticker)
+            price_prev = last_prices.get(ticker)
             
-            for ticker in tickers:
-                try:
-                    if ticker in sent_signals and current_time - sent_signals[ticker] < 600:
-                        continue
-
-                    stock = yf.Ticker(ticker)
-                    hist = stock.history(period="1d", interval="1m")
+            if price_now and price_prev:
+                change = ((price_now - price_prev) / price_prev) * 100
+                
+                # Фильтр по цене и волатильности
+                if price_now <= MAX_STOCK_PRICE and abs(change) >= VOLATILITY_THRESHOLD:
                     
-                    if len(hist) < 2: 
-                        continue
-                    
-                    price_now = hist['Close'].iloc[-1]
-                    price_prev = hist['Close'].iloc[-2]
-                    
-                    if pd.isna(price_now) or pd.isna(price_prev):
-                        continue
-                        
-                    change = ((price_now - price_prev) / price_prev) * 100
+                    if change > 0:
+                        # СИГНАЛ НА ПОКУПКУ (LONG)
+                        action = "🚀 BUY (LONG)"
+                        tp_price = price_now * 1.04  # Цель +4%
+                        qty = int(START_BALANCE / price_now)
+                        emoji = "📈"
+                    else:
+                        # СИГНАЛ НА ПАДЕНИЕ (SHORT)
+                        action = "📉 SELL (SHORT)"
+                        tp_price = price_now * 0.96  # Цель -4% (выкуп шорта)
+                        qty = int(START_BALANCE / price_now)
+                        emoji = "📉"
 
-                    if abs(change) >= VOLATILITY_THRESHOLD:
-                        action = "BUY" if change > 0 else "SELL"
-                        send_telegram_signal(ticker, action, price_now, change)
-                        sent_signals[ticker] = current_time
-                        print(f"🎯 Сигнал по {ticker} отправлен.")
-                        time.sleep(1) 
+                    msg = (
+                        f"{emoji} **СИГНАЛ: {action} {ticker}**\n"
+                        f"💰 Цена сейчас: ${price_now:.2f}\n"
+                        f"📊 Изменение: {change:+.2f}%\n"
+                        f"---------------------------\n"
+                        f"🎯 **СТАВЬ LIMIT ORDER НА: ${tp_price:.2f}**\n"
+                        f"📦 Объем (на весь Cash): {qty} шт.\n"
+                        f"⚠️ *Не забудь про задержку 20 мин!*"
+                    )
+                    await send_signal(msg)
+            
+            # Обновляем цену в памяти
+            last_prices[ticker] = price_now
+        
+        # Ждем 60 секунд до следующей проверки
+        await asyncio.sleep(60)
 
-                except Exception:
-                    continue
-        else:
-            print(f"💤 [{now.strftime('%H:%M:%S')}] Рынок закрыт или время сна.")
-            time.sleep(600)
-            continue
-
-        time.sleep(SCAN_INTERVAL)
-
-# --- ЗАПУСК ---
 if __name__ == "__main__":
-    try:
-        monitor()
-    except KeyboardInterrupt:
-        print("\nБот остановлен.")
-    except Exception as e:
-        print(f"Критическая ошибка: {e}")
+    asyncio.run(monitor())
