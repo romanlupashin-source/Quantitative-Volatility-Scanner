@@ -24,7 +24,9 @@ def get_price(ticker):
     try:
         data = yf.download(ticker, period='1d', interval='1m', progress=False)
         if not data.empty:
-            return data['Close'].iloc[-1]
+            # Берем последнее значение и ПРИНУДИТЕЛЬНО конвертируем в float
+            val = data['Close'].iloc[-1]
+            return float(val) 
     except Exception as e:
         print(f"Ошибка получения данных для {ticker}: {e}")
     return None
@@ -36,8 +38,8 @@ async def monitor():
     
     while True:
         for ticker in TICKERS:
-            price_now = get_price(ticker)
-            price_prev = last_prices.get(ticker)
+           # Вместо if price_now and price_prev:
+if price_now is not None and price_prev is not None:
             
             if price_now and price_prev:
                 change = ((price_now - price_prev) / price_prev) * 100
