@@ -25,16 +25,19 @@ async def send_signal(message):
 
 def analyze_ticker(ticker):
     try:
-        # Получаем данные за последние 5 минут с интервалом 1м
-        df = yf.download(ticker, period='5m', interval='1m', progress=False)
-        if len(df) < 2: return None
+        # Изменяем period на '1d', чтобы получить минутные свечи за сегодня
+        df = yf.download(ticker, period='1d', interval='1m', progress=False)
+        
+        # Нам нужны только последние несколько минут
+        if df.empty or len(df) < 2: 
+            return None
         
         last_price = float(df['Close'].iloc[-1])
         prev_price = float(df['Close'].iloc[-2])
         change = ((last_price - prev_price) / prev_price) * 100
         volume = df['Volume'].iloc[-1]
 
-        # Фильтр: цена до $15 и резкий скачок/падение
+        # Фильтр по цене и волатильности
         if last_price <= MAX_PRICE and abs(change) >= VOLATILITY_THRESHOLD:
             return {
                 'ticker': ticker,
@@ -42,7 +45,9 @@ def analyze_ticker(ticker):
                 'change': change,
                 'volume': volume
             }
-    except:
+    except Exception as e:
+        # Печатаем ошибку для отладки, если нужно
+        # print(f"Ошибка при анализе {ticker}: {e}")
         return None
     return None
 
