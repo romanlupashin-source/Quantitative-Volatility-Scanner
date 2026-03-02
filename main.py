@@ -51,28 +51,35 @@ def analyze_ticker(ticker):
         return None
     return None
 
+# Словарь для хранения времени последнего сигнала по тикерам
+import time
+last_signals = {}
+
 async def monitor():
     print("🚀 Авто-сканер запущен. Ищу цели...")
     while True:
         for ticker in SCAN_LIST:
             res = analyze_ticker(ticker)
-            if res:
-                emoji = "🚀 BUY (LONG)" if res['change'] > 0 else "📉 SELL (SHORT)"
-                target = res['price'] * 1.04 if res['change'] > 0 else res['price'] * 0.96
-                
-                msg = (
-                    f"🎯 **НАШЕЛ ЦЕЛЬ: {res['ticker']}**\n"
-                    f"Действие: {emoji}\n"
-                    f"💰 Цена: ${res['price']:.2f}\n"
-                    f"📊 Изменение: {res['change']:+.2f}%\n"
-                    f"🌊 Объем: {res['volume']}\n"
-                    f"---------------------------\n"
-                    f"🏁 Цель (Limit): ${target:.2f}\n"
-                    f"⚠️ *Действуй быстро, задержка 20 мин!*"
-                )
-                await send_signal(msg)
             
-        await asyncio.sleep(60) # Проверка каждую минуту
+            if res:
+                current_time = time.time()
+                # Проверяем, слали ли мы этот тикер в последние 15 минут (900 секунд)
+                if ticker not in last_signals or (current_time - last_signals[ticker]) > 900:
+                    
+                    emoji = "🚀 BUY (LONG)" if res['change'] > 0 else "📉 SELL (SHORT)"
+                    target = res['price'] * 1.04 if res['change'] > 0 else res['price'] * 0.96
+                    
+                    msg = (
+                        f"🎯 **НАШЕЛ ЦЕЛЬ: {res['ticker']}**\n"
+                        f"Действие: {emoji}\n"
+                        f"💰 Цена: ${res['price']:.2f}\n"
+                        # ... остальной текст сообщения ...
+                    )
+                    
+                    await send_signal(msg)
+                    last_signals[ticker] = current_time # Запоминаем время отправки
+            
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(monitor())
