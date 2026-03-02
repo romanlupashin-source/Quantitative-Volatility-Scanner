@@ -1,82 +1,115 @@
 import yfinance as yf
-import pandas as pd
-import requests
-import time
-from colorama import Fore, init
+import telebot
 from datetime import datetime
-import pytz
+import time
 
-init(autoreset=True)
+# --- НАСТРОЙКИ ---
+TOKEN = 'ТВОЙ_ТЕЛЕГРАМ_ТОКЕН'
+CHAT_ID = 'ТВОЙ_ID'
+bot = telebot.TeleBot(TOKEN)
 
-# КЛЮЧИ ТЕЛЕГРАМ
-TG_TOKEN = "8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk"
-TG_CHAT_ID = "6935198093" # <--- РОМАН, НЕ ЗАБУДЬ ВСТАВИТЬ СВОИ ЦИФРЫ!
+# Параметры игры
+START_BALANCE = 100000
+current_balance = START_BALANCE
+risk_per_trade = 0.1  # Используем 10% капитала на сделку
+positions = {}        # { 'TSLA': {'price': 150, 'qty': 50, 'time': '14:20'} }
 
-# НАСТРОЙКИ
-TICKERS = ["BTC-USD", "ETH-USD", "NVAX", "TSLA", "AAPL"] 
-MIN_MOVE_PCT = 2.0 
+# Часы активности (по твоему местному времени)
+WORK_START = 10  # Начинаем в 10:00
+WORK_END = 22    # В 22:00 принудительно выходим из всех акций
+SLEEP_MODE = 23  # С 23:00 до 09:00 — полная тишина
 
-# ПАМЯТЬ БОТА
-positions = {} 
+def get_stats():
+    """Считает текущий успех в процентах."""
+    profit_pct = ((current_balance - START_BALANCE) / START_BALANCE) * 100
+    return f"💰 Баланс: ${current_balance:.2f} ({profit_pct:+.2f}%)"
 
-def send_telegram(text):
-    """Отправка сообщений в Telegram"""
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TG_CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(Fore.RED + f"Ошибка отправки в TG: {e}")
-
-def analyze_ticker(ticker):
-    """Мозг бота с памятью позиций: Покупка -> Продажа"""
-    global positions 
+def close_all_positions():
+    """Функция 'Экстренный выход' перед сном."""
+    global current_balance, positions
+    if not positions:
+        return
     
-    try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period="1d", interval="5m")
-        if len(df) < 2: return
-
-        current_price = df['Close'].iloc[-1]
-        open_price = df['Open'].iloc[0]
-        pct_change = ((current_price - open_price) / open_price) * 100
-        
-        volume_today = df['Volume'].sum()
-        if volume_today * current_price < 100000: return
-
-        if ticker not in positions:
-            if pct_change <= -MIN_MOVE_PCT: 
-                positions[ticker] = current_price 
-                msg = f"🟢 *ПОКУПКА {ticker}*\nЦена: ${current_price:.2f}\nПричина: Просадка {pct_change:.2f}%"
-                print(Fore.GREEN + f"BUY {ticker}")
-                send_telegram(msg)
-                
-        else:
-            buy_price = positions[ticker]
-            profit_pct = ((current_price - buy_price) / buy_price) * 100
+    report = "🔔 **ВНИМАНИЕ: Закрытие смен!**\nПродаю всё, чтобы не рисковать ночью:\n\n"
+    
+    for ticker in list(positions.keys()):
+        try:
+            stock = yf.Ticker(ticker)
+            price = stock.fast_info['last_price']
             
-            if profit_pct >= 2.0 or profit_pct <= -1.0:
-                del positions[ticker] 
-                emoji = "🚀" if profit_pct > 0 else "🔻"
-                msg = f"{emoji} *ПРОДАЖА {ticker}*\nЦена: ${current_price:.2f}\nИтог: {profit_pct:.2f}%"
-                print(Fore.YELLOW + f"SELL {ticker}")
-                send_telegram(msg)
+            buy_price = positions[ticker]['price']
+            qty = positions[ticker]['qty']
+            profit = (price - buy_price) * qty
+            current_balance += profit
+            
+            report += f"❌ {ticker}: ${price} (Итог: {profit:+.2f})\n"
+            del positions[ticker]
+        except:
+            report += f"⚠️ Ошибка закрытия {ticker}\n"
+            
+    report += f"\n{get_stats()}\nСпокойной ночи! 💤"
+    bot.send_message(CHAT_ID, report, parse_mode='Markdown')
 
-    except Exception as e:
-        print(Fore.RED + f"Ошибка {ticker}: {e}")
+def process_signal(ticker, action, price):
+    """Решает, покупать или нет, учитывая время."""
+    global current_balance, positions
+    now = datetime.now().hour
 
-if __name__ == "__main__":
-    print(Fore.CYAN + "Бот запущен. Умный сканер с памятью позиций активирован...")
-    send_telegram("✅ Бот запущен в облаке. Мониторинг начался.")
-    
-    while True:
-        for ticker in TICKERS:
-            analyze_ticker(ticker)
+    # 1. Если уже поздно (например, после 21:00), новые сделки не открываем
+    if now >= WORK_END - 1 and action == "BUY":
+        print(f"Скоро спать, игнорирую покупку {ticker}")
+        return
+
+    if action == "BUY" and ticker not in positions:
+        # Считаем сколько купить на 10% от текущего баланса
+        cash_to_spend = current_balance * risk_per_trade
+        qty = int(cash_to_spend / price)
         
-        now = datetime.now().strftime("%H:%M:%S")
-        print(Fore.BLUE + f"[{now}] Цикл завершен. Ожидание 5 минут...")
-        time.sleep(300)
+        if qty > 0:
+            positions[ticker] = {'price': price, 'qty': qty}
+            msg = (f"🚀 **BUY {ticker}**\nЦена: ${price}\n"
+                   f"Куплено: {qty} шт.\n"
+                   f"Затрачено: ${qty*price:.2f}\n"
+                   f"{get_stats()}")
+            bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
+
+    elif action == "SELL" and ticker in positions:
+        buy_price = positions[ticker]['price']
+        qty = positions[ticker]['qty']
+        profit = (price - buy_price) * qty
+        current_balance += profit
+        
+        msg = (f"✅ **SELL {ticker}**\nЦена продажи: ${price}\n"
+               f"Результат: {profit:+.2f}\n"
+               f"{get_stats()}")
+        bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
+        del positions[ticker]
+
+# --- ГЛАВНЫЙ ЦИКЛ ---
+print("🤖 Робот-симулятор запущен...")
+
+while True:
+    now = datetime.now()
+    current_hour = now.hour
+    
+    # ЛОГИКА ВРЕМЕНИ:
+    # 1. Если наступил час закрытия (22:00) — сбрасываем акции
+    if current_hour == WORK_END and positions:
+        close_all_positions()
+
+    # 2. Если сейчас "рабочее время" — анализируем рынок
+    if WORK_START <= current_hour < WORK_END:
+        # Тут твой список тикеров
+        for t in ["TSLA", "NVDA", "AAPL"]:
+            # Здесь должна быть твоя стратегия (просадка или рост)
+            # Для примера имитируем получение цены:
+            # price = yf.Ticker(t).fast_info['last_price']
+            # process_signal(t, "BUY", price) 
+            pass
+    
+    # 3. Режим глубокого сна (чтобы не нагружать процессор ночью)
+    if current_hour >= SLEEP_MODE or current_hour < WORK_START:
+        print("Бот в режиме ожидания (ночь)...")
+        time.sleep(1800) # Проверка раз в 30 минут
+    else:
+        time.sleep(60)   # Днем проверка раз в минуту
