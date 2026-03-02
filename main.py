@@ -13,17 +13,16 @@ bot = telebot.TeleBot(TOKEN)
 
 START_BALANCE = 100000.0
 current_balance = START_BALANCE
-positions = {} # { 'TICKER': {'price': 0.0, 'qty': 0} }
 
-# Настройки времени (Твоё местное время после sudo timedatectl)
-WORK_START = 10 
-WORK_END = 23   
+# Настройки времени
+WORK_START = 10
+WORK_END = 23
 
 # Настройки стратегии
 VOLATILITY_THRESHOLD = 0.4  # Сигнал при изменении > 0.4% за минуту
 SCAN_INTERVAL = 15          # Проверка каждые 15 секунд
 
-# --- ФУНКЦИИ МОЗГА ---
+# --- ФУНКЦИИ ---
 
 def get_volatile_tickers():
     try:
@@ -37,13 +36,15 @@ def get_volatile_tickers():
         
         top_tickers = df['Symbol'].head(30).tolist()
         manual_list = ["BNAI", "MRNO", "RMSG", "MARA", "RIOT", "TQQQ", "SOXL", "NVDA", "TSLA"]
-        return list(set(top_tickers + manual_list))
+        
+        # Очистка тикеров от возможных пробелов
+        combined = [str(t).strip() for t in (top_tickers + manual_list)]
+        return list(set(combined))
     except Exception as e:
         print(f"⚠️ Ошибка сбора тикеров: {e}")
         return ["TSLA", "NVDA", "MARA", "TQQQ", "AAPL", "BNAI"]
 
 def send_telegram_signal(ticker, action, price, change):
-    """Отправка красивого уведомления в ТГ"""
     emoji = "🚀" if "BUY" in action else "⚠️"
     msg = (
         f"{emoji} **СИГНАЛ: {action} {ticker}**\n"
@@ -70,6 +71,7 @@ def monitor():
     while True:
         now = datetime.now()
         
+        # Обновление списка тикеров раз в 30 минут
         if time.time() - last_ticker_update > 1800:
             tickers = get_volatile_tickers()
             last_ticker_update = time.time()
@@ -80,28 +82,42 @@ def monitor():
             for ticker in tickers:
                 try:
                     stock = yf.Ticker(ticker)
-                    # ИСПРАВЛЕНИЕ: Берем период 1 день, интервал 1 минута
+                    # Используем период 1 день и интервал 1 минута
                     hist = stock.history(period="1d", interval="1m")
                     
-                    if len(hist) < 2: continue
+                    if len(hist) < 2:
+                        continue
                     
                     # Берем две последние закрытые минуты
                     price_now = hist['Close'].iloc[-1]
                     price_prev = hist['Close'].iloc[-2]
+                    
+                    if pd.isna(price_now) or pd.isna(price_prev):
+                        continue
+                        
                     change = ((price_now - price_prev) / price_prev) * 100
 
                     if abs(change) >= VOLATILITY_THRESHOLD:
                         action = "BUY" if change > 0 else "SELL"
                         send_telegram_signal(ticker, action, price_now, change)
-                        time.sleep(1) # Короткая пауза между сигналами
+                        print(f"🎯 Сигнал по {ticker}: {change:+.2f}%")
+                        time.sleep(1) 
 
                 except Exception as e:
-                    # Печатаем ошибку только если это не пустые данные
-                    if "Period" in str(e): print(f"Ошибка {ticker}: {e}")
+                    # Игнорируем ошибки конкретных тикеров, чтобы цикл не прерывался
                     continue
         else:
-            print(f"💤 [{now.strftime('%H:%M:%S')}] Время сна...")
+            print(f"💤 [{now.strftime('%H:%M:%S')}] Время сна. Жду открытия...")
             time.sleep(600)
             continue
 
         time.sleep(SCAN_INTERVAL)
+
+# --- ЗАПУСК ---
+if __name__ == "__main__":
+    try:
+        monitor()
+    except KeyboardInterrupt:
+        print("\nБот остановлен пользователем.")
+    except Exception as e:
+        print(f"Критическая ошибка: {e}")
