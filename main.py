@@ -4,8 +4,8 @@ from telegram import Bot
 import pandas as pd
 
 # --- НАСТРОЙКИ ---
-TELEGRAM_TOKEN = 'ТВОЙ_ТОКЕН_БОТА'
-CHAT_ID = 'ТВОЙ_CHAT_ID'
+TELEGRAM_TOKEN = '8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk'
+CHAT_ID = '6935198093'
 bot = Bot(token=TELEGRAM_TOKEN)
 
 # Параметры поиска
