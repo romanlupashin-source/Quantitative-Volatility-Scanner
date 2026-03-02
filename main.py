@@ -11,6 +11,7 @@ TOKEN = '8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk'
 CHAT_ID = '6935198093'
 bot = telebot.TeleBot(TOKEN)
 
+# Твой баланс в симуляторе (обновляй это число по мере роста капитала)
 START_BALANCE = 100000.0
 current_balance = START_BALANCE
 
@@ -22,6 +23,9 @@ WORK_END = 23
 VOLATILITY_THRESHOLD = 0.4  # Сигнал при изменении > 0.4% за минуту
 SCAN_INTERVAL = 15          # Проверка каждые 15 секунд
 
+# --- ПЕРЕМЕННЫЕ СОСТОЯНИЯ ---
+sent_signals = {}  # { 'TICKER': timestamp }
+
 # --- ФУНКЦИИ ---
 
 def get_volatile_tickers():
@@ -30,14 +34,12 @@ def get_volatile_tickers():
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
         
-        # Исправляем FutureWarning от pandas
         tables = pd.read_html(io.StringIO(response.text)) 
         df = tables[0]
         
         top_tickers = df['Symbol'].head(30).tolist()
         manual_list = ["BNAI", "MRNO", "RMSG", "MARA", "RIOT", "TQQQ", "SOXL", "NVDA", "TSLA"]
         
-        # Очистка тикеров от возможных пробелов
         combined = [str(t).strip() for t in (top_tickers + manual_list)]
         return list(set(combined))
     except Exception as e:
@@ -45,11 +47,19 @@ def get_volatile_tickers():
         return ["TSLA", "NVDA", "MARA", "TQQQ", "AAPL", "BNAI"]
 
 def send_telegram_signal(ticker, action, price, change):
+    global current_balance
+    
+    # Расчет: сколько штук купить на 90% текущего Buying Power
+    # Чтобы не вылететь за лимиты симулятора
+    percent_to_invest = 0.9 
+    potential_qty = int((current_balance * percent_to_invest) / price)
+    
     emoji = "🚀" if "BUY" in action else "⚠️"
     msg = (
         f"{emoji} **СИГНАЛ: {action} {ticker}**\n"
         f"📈 Изменение: {change:+.2f}%\n"
         f"💵 Цена (Real-time): ${price:.2f}\n"
+        f"📊 **РЕКОМЕНДАЦИЯ:** Купить **{potential_qty}** шт.\n"
         f"⏳ В симуляторе цена обновится через ~20 мин!\n"
         f"---------------------------\n"
         f"💰 Твой баланс: ${current_balance:.2f}"
@@ -58,8 +68,6 @@ def send_telegram_signal(ticker, action, price, change):
         bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
     except Exception as e:
         print(f"Ошибка ТГ: {e}")
-
-# --- ОСНОВНОЙ ЦИКЛ ---
 
 def monitor():
     global current_balance
@@ -70,25 +78,27 @@ def monitor():
 
     while True:
         now = datetime.now()
+        current_time = time.time()
         
-        # Обновление списка тикеров раз в 30 минут
-        if time.time() - last_ticker_update > 1800:
+        if current_time - last_ticker_update > 1800:
             tickers = get_volatile_tickers()
-            last_ticker_update = time.time()
+            last_ticker_update = current_time
+            sent_signals.clear()
 
         if WORK_START <= now.hour < WORK_END:
             print(f"🔎 [{now.strftime('%H:%M:%S')}] Сканирую {len(tickers)} акций...")
             
             for ticker in tickers:
                 try:
+                    if ticker in sent_signals and current_time - sent_signals[ticker] < 600:
+                        continue
+
                     stock = yf.Ticker(ticker)
-                    # Используем период 1 день и интервал 1 минута
                     hist = stock.history(period="1d", interval="1m")
                     
-                    if len(hist) < 2:
+                    if len(hist) < 2: 
                         continue
                     
-                    # Берем две последние закрытые минуты
                     price_now = hist['Close'].iloc[-1]
                     price_prev = hist['Close'].iloc[-2]
                     
@@ -100,14 +110,14 @@ def monitor():
                     if abs(change) >= VOLATILITY_THRESHOLD:
                         action = "BUY" if change > 0 else "SELL"
                         send_telegram_signal(ticker, action, price_now, change)
-                        print(f"🎯 Сигнал по {ticker}: {change:+.2f}%")
+                        sent_signals[ticker] = current_time
+                        print(f"🎯 Сигнал по {ticker} отправлен.")
                         time.sleep(1) 
 
-                except Exception as e:
-                    # Игнорируем ошибки конкретных тикеров, чтобы цикл не прерывался
+                except Exception:
                     continue
         else:
-            print(f"💤 [{now.strftime('%H:%M:%S')}] Время сна. Жду открытия...")
+            print(f"💤 [{now.strftime('%H:%M:%S')}] Рынок закрыт или время сна.")
             time.sleep(600)
             continue
 
@@ -118,6 +128,6 @@ if __name__ == "__main__":
     try:
         monitor()
     except KeyboardInterrupt:
-        print("\nБот остановлен пользователем.")
+        print("\nБот остановлен.")
     except Exception as e:
         print(f"Критическая ошибка: {e}")
