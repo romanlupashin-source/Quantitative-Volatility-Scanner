@@ -4,8 +4,8 @@ from datetime import datetime
 import time
 
 # --- НАСТРОЙКИ ---
-TOKEN = 'ТВОЙ_ТЕЛЕГРАМ_ТОКЕН'
-CHAT_ID = 'ТВОЙ_ID'
+TOKEN = '8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk'
+CHAT_ID = '6935198093'
 bot = telebot.TeleBot(TOKEN)
 
 # Параметры игры
