@@ -1,115 +1,118 @@
 import yfinance as yf
 import telebot
-from datetime import datetime
+import requests
+import pandas as pd
 import time
+from datetime import datetime
 
-# --- НАСТРОЙКИ ---
+# --- КОНФИГУРАЦИЯ ---
 TOKEN = '8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk'
 CHAT_ID = '6935198093'
 bot = telebot.TeleBot(TOKEN)
 
-# Параметры игры
-START_BALANCE = 100000
+START_BALANCE = 100000.0
 current_balance = START_BALANCE
-risk_per_trade = 0.1  # Используем 10% капитала на сделку
-positions = {}        # { 'TSLA': {'price': 150, 'qty': 50, 'time': '14:20'} }
+positions = {} # { 'TICKER': {'price': 0.0, 'qty': 0} }
 
-# Часы активности (по твоему местному времени)
-WORK_START = 10  # Начинаем в 10:00
-WORK_END = 22    # В 22:00 принудительно выходим из всех акций
-SLEEP_MODE = 23  # С 23:00 до 09:00 — полная тишина
+# Настройки времени (Твоё местное время после sudo timedatectl)
+WORK_START = 10 
+WORK_END = 23   
 
-def get_stats():
-    """Считает текущий успех в процентах."""
-    profit_pct = ((current_balance - START_BALANCE) / START_BALANCE) * 100
-    return f"💰 Баланс: ${current_balance:.2f} ({profit_pct:+.2f}%)"
+# Настройки стратегии
+VOLATILITY_THRESHOLD = 0.4  # Сигнал при изменении > 0.4% за минуту
+SCAN_INTERVAL = 15          # Проверка каждые 15 секунд
 
-def close_all_positions():
-    """Функция 'Экстренный выход' перед сном."""
-    global current_balance, positions
-    if not positions:
-        return
-    
-    report = "🔔 **ВНИМАНИЕ: Закрытие смен!**\nПродаю всё, чтобы не рисковать ночью:\n\n"
-    
-    for ticker in list(positions.keys()):
-        try:
-            stock = yf.Ticker(ticker)
-            price = stock.fast_info['last_price']
-            
-            buy_price = positions[ticker]['price']
-            qty = positions[ticker]['qty']
-            profit = (price - buy_price) * qty
-            current_balance += profit
-            
-            report += f"❌ {ticker}: ${price} (Итог: {profit:+.2f})\n"
-            del positions[ticker]
-        except:
-            report += f"⚠️ Ошибка закрытия {ticker}\n"
-            
-    report += f"\n{get_stats()}\nСпокойной ночи! 💤"
-    bot.send_message(CHAT_ID, report, parse_mode='Markdown')
+# --- ФУНКЦИИ МОЗГА ---
 
-def process_signal(ticker, action, price):
-    """Решает, покупать или нет, учитывая время."""
-    global current_balance, positions
-    now = datetime.now().hour
-
-    # 1. Если уже поздно (например, после 21:00), новые сделки не открываем
-    if now >= WORK_END - 1 and action == "BUY":
-        print(f"Скоро спать, игнорирую покупку {ticker}")
-        return
-
-    if action == "BUY" and ticker not in positions:
-        # Считаем сколько купить на 10% от текущего баланса
-        cash_to_spend = current_balance * risk_per_trade
-        qty = int(cash_to_spend / price)
+def get_volatile_tickers():
+    """Сканирует рынок на самые активные акции (Top Gainers/Most Active)"""
+    try:
+        # Берем список самых активных акций с Yahoo Finance
+        url = "https://finance.yahoo.com/markets/stocks/most-active/"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        tables = pd.read_html(response.text)
+        df = tables[0]
         
-        if qty > 0:
-            positions[ticker] = {'price': price, 'qty': qty}
-            msg = (f"🚀 **BUY {ticker}**\nЦена: ${price}\n"
-                   f"Куплено: {qty} шт.\n"
-                   f"Затрачено: ${qty*price:.2f}\n"
-                   f"{get_stats()}")
-            bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
-
-    elif action == "SELL" and ticker in positions:
-        buy_price = positions[ticker]['price']
-        qty = positions[ticker]['qty']
-        profit = (price - buy_price) * qty
-        current_balance += profit
+        # Берем тикеры и фильтруем по объему (Volume > 1,000,000)
+        # Это поможет обходить лимит симулятора в 0.10% дневного объема
+        df['Avg Vol (3 month)'] = pd.to_numeric(df['Avg Vol (3 month)'].astype(str).str.replace('M', '000000').str.replace('B', '000000000'), errors='coerce')
         
-        msg = (f"✅ **SELL {ticker}**\nЦена продажи: ${price}\n"
-               f"Результат: {profit:+.2f}\n"
-               f"{get_stats()}")
+        top_tickers = df['Symbol'].head(30).tolist()
+        
+        # Твои "ручные" ракеты (Penny Stocks из портфеля лидера)
+        manual_list = ["BNAI", "MRNO", "RMSG", "MARA", "RIOT", "TQQQ", "SOXL", "NVDA", "TSLA"]
+        
+        return list(set(top_tickers + manual_list))
+    except Exception as e:
+        print(f"⚠️ Ошибка сбора тикеров: {e}")
+        return ["TSLA", "NVDA", "MARA", "TQQQ", "AAPL", "BNAI"]
+
+def send_telegram_signal(ticker, action, price, change):
+    """Отправка красивого уведомления в ТГ"""
+    emoji = "🚀" if "BUY" in action else "⚠️"
+    msg = (
+        f"{emoji} **СИГНАЛ: {action} {ticker}**\n"
+        f"📈 Изменение: {change:+.2f}%\n"
+        f"💵 Цена (Real-time): ${price:.2f}\n"
+        f"⏳ В симуляторе цена обновится через ~20 мин!\n"
+        f"---------------------------\n"
+        f"💰 Твой баланс: ${current_balance:.2f}"
+    )
+    try:
         bot.send_message(CHAT_ID, msg, parse_mode='Markdown')
-        del positions[ticker]
+    except Exception as e:
+        print(f"Ошибка ТГ: {e}")
 
-# --- ГЛАВНЫЙ ЦИКЛ ---
-print("🤖 Робот-симулятор запущен...")
+# --- ОСНОВНОЙ ЦИКЛ ---
 
-while True:
-    now = datetime.now()
-    current_hour = now.hour
+def monitor():
+    global current_balance
+    print(f"🤖 Машина времени запущена. Баланс: ${current_balance}")
     
-    # ЛОГИКА ВРЕМЕНИ:
-    # 1. Если наступил час закрытия (22:00) — сбрасываем акции
-    if current_hour == WORK_END and positions:
-        close_all_positions()
+    # Обновляем список тикеров раз в 30 минут
+    tickers = get_volatile_tickers()
+    last_ticker_update = time.time()
 
-    # 2. Если сейчас "рабочее время" — анализируем рынок
-    if WORK_START <= current_hour < WORK_END:
-        # Тут твой список тикеров
-        for t in ["TSLA", "NVDA", "AAPL"]:
-            # Здесь должна быть твоя стратегия (просадка или рост)
-            # Для примера имитируем получение цены:
-            # price = yf.Ticker(t).fast_info['last_price']
-            # process_signal(t, "BUY", price) 
-            pass
-    
-    # 3. Режим глубокого сна (чтобы не нагружать процессор ночью)
-    if current_hour >= SLEEP_MODE or current_hour < WORK_START:
-        print("Бот в режиме ожидания (ночь)...")
-        time.sleep(1800) # Проверка раз в 30 минут
-    else:
-        time.sleep(60)   # Днем проверка раз в минуту
+    while True:
+        now = datetime.now()
+        
+        # Обновляем список тикеров
+        if time.time() - last_ticker_update > 1800:
+            tickers = get_volatile_tickers()
+            last_ticker_update = time.time()
+
+        # Работаем только в "человеческое" время
+        if WORK_START <= now.hour < WORK_END:
+            print(f"🔎 [{now.strftime('%H:%M:%S')}] Сканирую {len(tickers)} акций...")
+            
+            for ticker in tickers:
+                try:
+                    stock = yf.Ticker(ticker)
+                    # Берем данные за последние 2 минуты с минутным интервалом
+                    hist = stock.history(period="2m", interval="1m")
+                    
+                    if len(hist) < 2: continue
+                    
+                    price_now = hist['Close'].iloc[-1]
+                    price_prev = hist['Close'].iloc[-2]
+                    change = ((price_now - price_prev) / price_prev) * 100
+
+                    # Если видим резкий скачок (Машина времени)
+                    if abs(change) >= VOLATILITY_THRESHOLD:
+                        action = "BUY" if change > 0 else "SELL"
+                        send_telegram_signal(ticker, action, price_now, change)
+                        # Чтобы не спамить по одной и той же акции:
+                        time.sleep(2) 
+
+                except Exception:
+                    continue
+        else:
+            print(f"💤 [{now.strftime('%H:%M:%S')}] Время сна. Жду...")
+            time.sleep(600) # Ночью проверяем раз в 10 минут
+            continue
+
+        time.sleep(SCAN_INTERVAL)
+
+if __name__ == "__main__":
+    monitor()
