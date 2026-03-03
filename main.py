@@ -2,7 +2,7 @@ import yfinance as yf
 import asyncio
 from telegram import Bot
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 import time
 
@@ -12,14 +12,11 @@ CHAT_ID = '6935198093'
 bot = Bot(token=TELEGRAM_TOKEN)
 
 MAX_PRICE = 15.0
-MIN_VOLUME = 500000
 VOLATILITY_THRESHOLD = 1.5
-
 SCAN_LIST = ['BNAI', 'TIRX', 'JEM', 'LBGJ', 'KIDZ', 'TPET', 'BURU', 'SABR', 'BATL', 'VEEA', 'JPM', 'TSLA']
 
-# Словари для памяти бота
-last_signals = {}  # Время последнего сигнала
-active_trades = {} # Слежение за открытыми позициями {тикер: {'price': цена, 'time': время}}
+last_signals = {}  # Память для анти-спама
+active_trades = {} # Слежение за сделками для проверки через 30 мин
 
 async def send_signal(message):
     print(f"Отправка: {message}")
@@ -33,9 +30,10 @@ def get_ny_time():
 
 def is_market_open():
     now = get_ny_time()
-    if now.weekday() > 4: return False # Выходные
-    start = now.replace(hour=9, minute=30, second=0)
-    end = now.replace(hour=16, minute=0, second=0)
+    if now.weekday() > 4: return False
+    # Рынок США: 09:30 - 16:00
+    start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    end = now.replace(hour=16, minute=0, second=0, microsecond=0)
     return start <= now <= end
 
 def analyze_ticker(ticker):
@@ -43,10 +41,14 @@ def analyze_ticker(ticker):
         df = yf.download(ticker, period='1d', interval='1m', progress=False)
         if df.empty or len(df) < 2: return None
         
-        last_price = float(df['Close'].iloc[-1])
-        prev_price = float(df['Close'].iloc[-2])
+        # Исправляем FutureWarning: переводим в numpy массив
+        closes = df['Close'].to_numpy()
+        volumes = df['Volume'].to_numpy()
+        
+        last_price = float(closes[-1])
+        prev_price = float(closes[-2])
         change = ((last_price - prev_price) / prev_price) * 100
-        volume = int(df['Volume'].iloc[-1])
+        volume = int(volumes[-1])
 
         if last_price <= MAX_PRICE and abs(change) >= VOLATILITY_THRESHOLD:
             return {'ticker': ticker, 'price': last_price, 'change': change, 'volume': volume}
@@ -55,69 +57,65 @@ def analyze_ticker(ticker):
     return None
 
 async def monitor():
-    print("🚀 Робот-скальпер запущен.")
-    alert_sent = False
+    print("🚀 Скрипт запущен. Жду торговую сессию...")
+    alert_10m_sent = False
 
     while True:
         now = get_ny_time()
+        curr_ts = time.time()
+
+        # 1. Уведомление за 10 минут до открытия (в 09:20 по NY)
+        if now.hour == 9 and now.minute == 20 and not alert_10m_sent:
+            await send_signal("🔔 **ЧЕРЕЗ 10 МИНУТ ОТКРЫТИЕ!** Готовь Buying Power в симуляторе.")
+            alert_10m_sent = True
         
-        # 1. Проверка на "за 10 минут до открытия"
-        if now.hour == 9 and now.minute == 20 and not alert_sent:
-            await send_signal("🔔 **ВНИМАНИЕ!** До открытия биржи 10 минут. Проверь баланс в симуляторе!")
-            alert_sent = True
-        if now.hour == 9 and now.minute == 31: # Сброс флага после открытия
-            alert_sent = False
+        # Сброс флага уведомления в конце дня
+        if now.hour == 16: alert_10m_sent = False
 
         # 2. Если биржа закрыта — спим
         if not is_market_open():
-            # Ночью проверяем раз в 5 минут, чтобы не нагружать систему
-            await asyncio.sleep(300)
+            await asyncio.sleep(60)
             continue
 
-        # 3. Основной цикл сканирования
+        # 3. Активная фаза: сканируем тикеры
         for ticker in SCAN_LIST:
             res = analyze_ticker(ticker)
-            curr_ts = time.time()
             
-            # --- ЛОГИКА ВХОДА ---
             if res:
-                # Если по тикеру не было сигналов последние 15 мин
+                # Анти-спам: не чаще чем раз в 15 минут
                 if ticker not in last_signals or (curr_ts - last_signals[ticker]) > 900:
                     emoji = "🚀 BUY" if res['change'] > 0 else "📉 SHORT"
                     msg = (
-                        f"🎯 **ЦЕЛЬ НАЙДЕНА: {res['ticker']}**\n"
+                        f"🎯 **ЦЕЛЬ: {res['ticker']}**\n"
                         f"Действие: {emoji}\n"
                         f"💰 Цена входа: ${res['price']:.2f}\n"
-                        f"📈 Скачок: {res['change']:+.2f}%\n"
-                        f"⚠️ *Через 30 мин я проверю эту сделку!*"
+                        f"📊 Изменение: {res['change']:+.2f}%\n"
+                        f"⏳ Проверю через 30 минут!"
                     )
                     await send_signal(msg)
                     last_signals[ticker] = curr_ts
-                    # Запоминаем сделку для проверки через 30 мин
-                    active_trades[ticker] = {'entry_price': res['price'], 'entry_time': curr_ts}
+                    active_trades[ticker] = {'entry_price': res['price'], 'time': curr_ts}
 
-            # --- ЛОГИКА ПРОВЕРКИ ЧЕРЕЗ 30 МИНУТ ---
+            # 4. Проверка сделки через 30 минут
             if ticker in active_trades:
                 trade = active_trades[ticker]
-                # Если прошло 30 минут (1800 секунд)
-                if curr_ts - trade['entry_time'] >= 1800:
-                    # Получаем текущую цену для проверки
+                if curr_ts - trade['time'] >= 1800: # 30 минут
                     df_check = yf.download(ticker, period='1d', interval='1m', progress=False)
                     if not df_check.empty:
-                        current_p = float(df_check['Close'].iloc[-1])
-                        profit = ((current_p - trade['entry_price']) / trade['entry_price']) * 100
+                        current_p = float(df_check['Close'].to_numpy()[-1])
+                        diff = ((current_p - trade['entry_price']) / trade['entry_price']) * 100
                         
-                        if profit > 1.0:
-                            status = f"✅ **ФИКСИРУЙ ПРИБЫЛЬ!**\nРост: +{profit:.2f}%"
-                        elif profit < -1.0:
-                            status = f"❌ **ОТМЕНА / ВЫХОД!**\nЦена пошла вниз: {profit:.2f}%"
+                        if diff > 1.0:
+                            status = f"✅ **ПРИБЫЛЬ: {diff:.2f}%** — Фиксируй!"
+                        elif diff < -1.0:
+                            status = f"❌ **УБЫТОК: {diff:.2f}%** — Выходи!"
                         else:
-                            status = f"⏳ **ВРЕМЯ ВЫШЛО.**\nЦена почти не изменилась ({profit:+.2f}%). Лучше выйти и искать новое."
+                            status = f"⏳ **СТОЯК: {diff:+.2f}%** — Закрывай, нет движения."
                         
-                        await send_signal(f"📢 **ОТЧЕТ ПО {ticker}:**\n{status}\nЦена была: ${trade['entry_price']:.2f}\nЦена сейчас: ${current_p:.2f}")
-                        del active_trades[ticker] # Убираем из слежки
+                        await send_signal(f"📢 **ОТЧЕТ ПО {ticker}** (через 30м):\n{status}\nВход: ${trade['entry_price']:.2f} -> Сейчас: ${current_p:.2f}")
+                        del active_trades[ticker]
 
-        await asyncio.sleep(60) # Пауза 1 минута между циклами
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(monitor())
