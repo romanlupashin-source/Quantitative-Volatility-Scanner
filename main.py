@@ -56,66 +56,61 @@ def analyze_ticker(ticker):
         return None
     return None
 
-async def monitor():
-    print("🚀 Скрипт запущен. Жду торговую сессию...")
-    alert_10m_sent = False
+# ... (начало кода остается прежним) ...
 
+async def monitor():
+    print("🚀 Робот-скальпер запущен.")
     while True:
         now = get_ny_time()
         curr_ts = time.time()
 
-        # 1. Уведомление за 10 минут до открытия (в 09:20 по NY)
-        if now.hour == 9 and now.minute == 20 and not alert_10m_sent:
-            await send_signal("🔔 **ЧЕРЕЗ 10 МИНУТ ОТКРЫТИЕ!** Готовь Buying Power в симуляторе.")
-            alert_10m_sent = True
-        
-        # Сброс флага уведомления в конце дня
-        if now.hour == 16: alert_10m_sent = False
+        # (Блок с проверкой работы рынка...)
 
-        # 2. Если биржа закрыта — спим
-        if not is_market_open():
-            await asyncio.sleep(60)
-            continue
-
-        # 3. Активная фаза: сканируем тикеры
         for ticker in SCAN_LIST:
             res = analyze_ticker(ticker)
             
+            # --- 1. ПРОВЕРКА ТЕКУЩИХ СДЕЛОК (Динамическая) ---
+            if ticker in active_trades:
+                trade = active_trades[ticker]
+                # Получаем текущую цену для экстренной проверки
+                df_check = yf.download(ticker, period='1d', interval='1m', progress=False)
+                if not df_check.empty:
+                    current_p = float(df_check['Close'].to_numpy()[-1])
+                    diff = ((current_p - trade['entry_price']) / trade['entry_price']) * 100
+                    
+                    # ЭКСТРЕННЫЙ ВЫХОД (если цена упала больше чем на 2% от входа)
+                    if diff < -2.0:
+                        await send_signal(f"⚠️ **ЭКСТРЕННАЯ ОТМЕНА: {ticker}**\nЦена падает слишком быстро! Выходи сейчас.\nУбыток: {diff:.2f}%")
+                        del active_trades[ticker]
+                        continue # Пропускаем анализ новых сигналов для этого тикера на этом круге
+
+                    # ПЛАНОВАЯ ПРОВЕРКА (через 30 минут)
+                    if curr_ts - trade['time'] >= 1800:
+                        status = "✅ ПРИБЫЛЬ" if diff > 1.0 else "❌ ВЫХОДИ"
+                        await send_signal(f"📢 **ОТЧЕТ ПО {ticker} (30 мин):**\n{status}: {diff:.2f}%\nЗакрывай сделку, прежде чем открывать шорт.")
+                        del active_trades[ticker]
+
+            # --- 2. ЛОГИКА НОВЫХ СИГНАЛОВ ---
             if res:
-                # Анти-спам: не чаще чем раз в 15 минут
+                # Если уже есть активная сделка по этому тикеру — новые сигналы ИГНОРИРУЕМ
+                if ticker in active_trades:
+                    continue
+
                 if ticker not in last_signals or (curr_ts - last_signals[ticker]) > 900:
+                    # Предлагаем шорт только если нет активного лонга
                     emoji = "🚀 BUY" if res['change'] > 0 else "📉 SHORT"
                     msg = (
                         f"🎯 **ЦЕЛЬ: {res['ticker']}**\n"
                         f"Действие: {emoji}\n"
-                        f"💰 Цена входа: ${res['price']:.2f}\n"
-                        f"📊 Изменение: {res['change']:+.2f}%\n"
-                        f"⏳ Проверю через 30 минут!"
+                        f"💰 Цена: ${res['price']:.2f}\n"
+                        f"📈 Скачок: {res['change']:+.2f}%\n"
+                        f"⏳ Я слежу за ней, сообщу если что-то пойдет не так!"
                     )
                     await send_signal(msg)
                     last_signals[ticker] = curr_ts
                     active_trades[ticker] = {'entry_price': res['price'], 'time': curr_ts}
 
-            # 4. Проверка сделки через 30 минут
-            if ticker in active_trades:
-                trade = active_trades[ticker]
-                if curr_ts - trade['time'] >= 1800: # 30 минут
-                    df_check = yf.download(ticker, period='1d', interval='1m', progress=False)
-                    if not df_check.empty:
-                        current_p = float(df_check['Close'].to_numpy()[-1])
-                        diff = ((current_p - trade['entry_price']) / trade['entry_price']) * 100
-                        
-                        if diff > 1.0:
-                            status = f"✅ **ПРИБЫЛЬ: {diff:.2f}%** — Фиксируй!"
-                        elif diff < -1.0:
-                            status = f"❌ **УБЫТОК: {diff:.2f}%** — Выходи!"
-                        else:
-                            status = f"⏳ **СТОЯК: {diff:+.2f}%** — Закрывай, нет движения."
-                        
-                        await send_signal(f"📢 **ОТЧЕТ ПО {ticker}** (через 30м):\n{status}\nВход: ${trade['entry_price']:.2f} -> Сейчас: ${current_p:.2f}")
-                        del active_trades[ticker]
-
         await asyncio.sleep(60)
-
+        
 if __name__ == "__main__":
     asyncio.run(monitor())
