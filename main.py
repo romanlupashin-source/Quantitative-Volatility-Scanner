@@ -39,13 +39,24 @@ tickers_to_watch = {
         "XPON",  # Expion360
         "BITF",  # Bitfarms (Майнинг биткоина)
     ]
+    # ТИЙКЕРЫ ОТ "СНАЙПЕРА" (investor66769071)
+# Эти акции позволяют торговать на большие суммы без ошибок симулятора
+SNIPER_LIST = [
+    "GO",    # Grocery Outlet (его текущая ставка)
+    "NPT",   # На чем он поднял основной капитал
+    "AARD",  # Акция для шорта
+    "SHMD",  # Постоянно крутит её в обе стороны
+    "BFLY"   # Butterfly Network
+]
+
 }
 
 # Если тебе нужен простой список всех тикеров сразу для цикла:
 SCAN_LIST = [
     "SOC", "TNGX", "AMPX", "TTD", "BVC", "NVDA", "PLUG", "ONDS", 
     "INTC", "GXAI", "HCTI", "XPON", "BITF", "BNAI", "JEM", 
-    "LBGJ", "KIDZ", "TPET", "BURU", "SABR", "BATL", "VEEA", "JPM", "TSLA"
+    "LBGJ", "KIDZ", "TPET", "BURU", "SABR", "BATL", "VEEA", "JPM", "TSLA",
+    "GO", "NPT", "AARD", "SHMD", "BFLY"
 ]
 
 last_signals = {}  # Память для анти-спама
