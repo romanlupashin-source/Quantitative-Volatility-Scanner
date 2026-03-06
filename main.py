@@ -11,31 +11,32 @@ TELEGRAM_TOKEN = '8478161813:AAHQQr7jK16wWFB4Hx5aiIW56Sy1AdCT_pk'
 CHAT_ID = '6935198093'
 bot = Bot(token=TELEGRAM_TOKEN)
 
-MAX_PRICE = 60.0  # Поднял до 60, чтобы бот видел BNAI и GO
-VOLATILITY_THRESHOLD = 1.5
+MAX_PRICE = 60.0  
+VOLATILITY_THRESHOLD = 0.5  # Сверхчувствительность: ловим микродвижения
+LOOP_INTERVAL = 10          # Частота опроса: каждые 10 секунд
+ANTISPAM_TIME = 120         # Повторный сигнал по той же акции через 2 минуты
 
-# Список тикеров, распределенный по категориям
+# Список тикеров
 tickers_to_watch = {
     "top_gainers": ["SOC", "TNGX", "AMPX", "TTD", "BVC"],
     "high_volume": ["NVDA", "PLUG", "ONDS", "INTC"],
     "penny_stocks": ["GXAI", "HCTI", "XPON", "BITF"],
-    "sniper_list": ["GO", "NPT", "AARD", "SHMD", "BFLY"] # Исправлено здесь
+    "sniper_list": ["GO", "NPT", "AARD", "SHMD", "BFLY"]
 }
 
-# Автоматическое формирование списка для сканирования
 SCAN_LIST = list(set(
     tickers_to_watch["top_gainers"] + 
     tickers_to_watch["high_volume"] + 
     tickers_to_watch["penny_stocks"] + 
     tickers_to_watch["sniper_list"] + 
-    ["BNAI", "JEM", "TPET", "BATL", "VEEA"]
+    ["BNAI", "JEM", "TPET", "BATL", "VEEA", "AGL", "AIFF", "TURB"]
 ))
 
 last_signals = {}  
 active_trades = {} 
 
 async def send_signal(message):
-    print(f"Отправка: {message}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Отправка в TG...")
     try:
         await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
     except Exception as e:
@@ -53,7 +54,7 @@ def is_market_open():
 
 def analyze_ticker(ticker):
     try:
-        # Убрали progress=False для чистоты логов
+        # Загружаем данные за 1 день с минутным интервалом
         df = yf.download(ticker, period='1d', interval='1m', progress=False)
         if df.empty or len(df) < 2: return None
         
@@ -65,34 +66,30 @@ def analyze_ticker(ticker):
         change = ((last_price - prev_price) / prev_price) * 100
         volume = int(volumes[-1])
 
-        # Фильтр по цене и волатильности
+        # Фильтр: цена до 60$ и изменение от 0.5% за минуту
         if last_price <= MAX_PRICE and abs(change) >= VOLATILITY_THRESHOLD:
             return {'ticker': ticker, 'price': last_price, 'change': change, 'volume': volume}
-    except Exception as e:
+    except:
         return None
     return None
 
 async def monitor():
-    print(f"🚀 Робот-скальпер запущен. В списке {len(SCAN_LIST)} тикеров.")
+    print(f"🔥 Режим 'Снайпер' активирован. Интервал: {LOOP_INTERVAL}с, Порог: {VOLATILITY_THRESHOLD}%")
+    print(f"Сканирую {len(SCAN_LIST)} тикеров...")
+    
     alert_10m_sent = False
 
     while True:
         now = get_ny_time()
         curr_ts = time.time()
 
-        # Будильник перед открытием
-        if now.hour == 9 and now.minute == 20 and not alert_10m_sent:
-            await send_signal("🔔 **ЧЕРЕЗ 10 МИНУТ ОТКРЫТИЕ!** Готовь Buying Power.")
-            alert_10m_sent = True
-        if now.hour == 16: alert_10m_sent = False
-
         if not is_market_open():
-            # Если рынок закрыт, проверяем раз в минуту
+            print("💤 Рынок закрыт. Жду открытия...")
             await asyncio.sleep(60)
             continue
 
         for ticker in SCAN_LIST:
-            # 1. Сначала проверяем активные сделки
+            # 1. Проверка активных сделок
             if ticker in active_trades:
                 trade = active_trades[ticker]
                 res_check = analyze_ticker(ticker)
@@ -101,39 +98,37 @@ async def monitor():
                     current_p = res_check['price']
                     diff = ((current_p - trade['entry_price']) / trade['entry_price']) * 100
                     
-                    # ЭКСТРЕННЫЙ STOP-LOSS (для Лонга) или TAKE-PROFIT (для Шорта)
-                    # Если цена пошла против нас на 2.5%
                     if diff < -2.5: 
-                        await send_signal(f"⚠️ **ALARM: {ticker}**\nЦена ушла не туда: {diff:.2f}%\nРекомендую закрыть позицию в симуляторе.")
+                        await send_signal(f"⚠️ **STOP-LOSS ALERT: {ticker}**\nПросадка: {diff:.2f}%\nСрочно проверь ордер!")
                         del active_trades[ticker]
                         continue
 
-                    # ПЛАНОВАЯ ПРОВЕРКА (30 минут)
                     if curr_ts - trade['time'] >= 1800:
-                        status = "✅ В ПЛЮСЕ" if diff > 0.5 else "❌ В ПРЕСНОЙ ВОДЕ / МИНУСЕ"
-                        await send_signal(f"📢 **ОТЧЕТ ПО {ticker} (30 мин):**\n{status}: {diff:.2f}%\nОрдер можно закрывать или переставлять.")
+                        status = "✅ ПРОФИТ" if diff > 0.5 else "⏳ СТАГНАЦИЯ"
+                        await send_signal(f"📢 **ОТЧЕТ (30 мин) по {ticker}:**\nРезультат: {diff:.2f}%\nПозиция свободна.")
                         del active_trades[ticker]
                 continue 
 
             # 2. Поиск новых сигналов
             res = analyze_ticker(ticker)
             if res:
-                if ticker not in last_signals or (curr_ts - last_signals[ticker]) > 900:
+                # Анти-спам 2 минуты
+                if ticker not in last_signals or (curr_ts - last_signals[ticker]) > ANTISPAM_TIME:
                     action = "🚀 BUY" if res['change'] > 0 else "📉 SHORT"
                     
                     msg = (
                         f"🎯 **ЦЕЛЬ: {res['ticker']}**\n"
                         f"Действие: {action}\n"
-                        f"💰 Вход: ${res['price']:.2f}\n"
-                        f"📈 Импульс: {res['change']:+.2f}%\n"
+                        f"💰 Цена: ${res['price']:.2f}\n"
+                        f"⚡ Импульс: {res['change']:+.2f}%\n"
                         f"📊 Объем: {res['volume']}"
                     )
                     await send_signal(msg)
                     last_signals[ticker] = curr_ts
                     active_trades[ticker] = {'entry_price': res['price'], 'time': curr_ts}
 
-        # Пауза между циклами сканирования всего списка
-        await asyncio.sleep(30) # 30 секунд - оптимально, чтобы не забанили IP на yfinance
-        
+        # Боевая пауза
+        await asyncio.sleep(LOOP_INTERVAL)
+
 if __name__ == "__main__":
     asyncio.run(monitor())
