@@ -13,7 +13,40 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 MAX_PRICE = 15.0
 VOLATILITY_THRESHOLD = 1.5
-SCAN_LIST = ['BNAI', 'TIRX', 'JEM', 'LBGJ', 'KIDZ', 'TPET', 'BURU', 'SABR', 'BATL', 'VEEA', 'JPM', 'TSLA']
+# Список тикеров, распределенный по категориям
+tickers_to_watch = {
+    # ЛИДЕРЫ РОСТА (High Momentum) - те, кто дает иксы сегодня
+    "top_gainers": [
+        "SOC",   # Sable Offshore (Энергетика, +37%)
+        "TNGX",  # Tango Therapeutics (Биотех, +36%)
+        "AMPX",  # Amprius Tech (Батареи, +18%)
+        "TTD",   # The Trade Desk (Реклама, +18%)
+        "BVC",   # BitVentures (Крипто-связанные, +18%)
+    ],
+
+    # САМЫЕ АКТИВНЫЕ (High Volume) - высокая ликвидность
+    "high_volume": [
+        "NVDA",  # NVIDIA (Лидер рынка)
+        "PLUG",  # Plug Power (Сильная волатильность)
+        "ONDS",  # Ondas Holdings
+        "INTC",  # Intel (Восстановление)
+    ],
+
+    # ПЕРСПЕКТИВНЫЕ МАЛОЦЕНКИ (Penny Stocks / High Risk)
+    "penny_stocks": [
+        "GXAI",  # Gaxos AI (ИИ-гейминг)
+        "HCTI",  # Healthcare Triangle (Медицина)
+        "XPON",  # Expion360
+        "BITF",  # Bitfarms (Майнинг биткоина)
+    ]
+}
+
+# Если тебе нужен простой список всех тикеров сразу для цикла:
+SCAN_LIST = [
+    "SOC", "TNGX", "AMPX", "TTD", "BVC", "NVDA", "PLUG", "ONDS", 
+    "INTC", "GXAI", "HCTI", "XPON", "BITF", "BNAI", "JEM", 
+    "LBGJ", "KIDZ", "TPET", "BURU", "SABR", "BATL", "VEEA", "JPM", "TSLA"
+]
 
 last_signals = {}  # Память для анти-спама
 active_trades = {} # Слежение за сделками для проверки через 30 мин
